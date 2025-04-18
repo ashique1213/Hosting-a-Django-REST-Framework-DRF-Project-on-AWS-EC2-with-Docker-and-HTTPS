@@ -28,7 +28,188 @@ Before starting, ensure you have:
 - **EC2 Instance**: Ubuntu with public IP (e.g., `13.127.106.180`).
 - **HTTPS**: Secured with Let’s Encrypt SSL certificates.
 
-### Configuration Files bellow the Documentation 
+## Configuration Files
+
+Below are the final, working configuration files used in this deployment.
+
+### `docker-compose.yml`
+
+```yaml
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      sh -c "python manage.py collectstatic --noinput &&
+             daphne -b 0.0.0.0 -p 8000 yourprojectname.asgi:application"
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    networks:
+      - yourprojectname-network
+
+  db:
+    image: postgres:16.4
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - yourprojectname-network
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - yourprojectname-network
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A yourprojectname worker --loglevel=info
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - web
+      - redis
+    networks:
+      - yourprojectname-network
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A yourprojectname beat --loglevel=info
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - web
+      - redis
+    networks:
+      - yourprojectname-network
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./staticfiles:/app/staticfiles
+      - /etc/letsencrypt:/etc/letsencrypt
+    depends_on:
+      - web
+    networks:
+      - yourprojectname-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  yourprojectname-network:
+    driver: bridge
+```
+
+### `Dockerfile`
+
+```dockerfile
+FROM python:3.13-slim
+
+# Create appuser and app directory
+RUN useradd -m -u 1000 appuser && mkdir /app && chown -R appuser:appuser /app
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y gcc libpq-dev curl && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# Copy project files
+COPY . .
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Use non-root user
+USER appuser
+
+EXPOSE 8000
+
+# For Daphne container (in docker-compose) we override CMD anyway
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "yourprojectname.wsgi:application"]
+```
+
+### `nginx/nginx.conf`
+
+```text
+upstream django {
+    server web:8000;
+}
+
+server {
+    listen 80;
+    server_name api.yourdomainname 13.127.106.180;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name api.yourdomainname;
+
+    ssl_certificate /etc/letsencrypt/live/api.yourdomainname/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.yourdomainname/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    client_max_body_size 100M;
+
+    location / {
+        proxy_pass http://django;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /static/ {
+        alias /app/staticfiles/;
+    }
+
+    location /ws/ {
+        proxy_pass http://django;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
 
 
 ## Step-by-Step Setup Guide
@@ -620,189 +801,6 @@ Check that all components are working correctly.
      ```bash
      docker-compose logs --tail=10
      ```
-
-## Configuration Files
-
-Below are the final, working configuration files used in this deployment.
-
-### `docker-compose.yml`
-
-```yaml
-services:
-  web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: >
-      sh -c "python manage.py collectstatic --noinput &&
-             daphne -b 0.0.0.0 -p 8000 yourprojectname.asgi:application"
-    volumes:
-      - .:/app
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    depends_on:
-      - db
-      - redis
-    networks:
-      - yourprojectname-network
-
-  db:
-    image: postgres:16.4
-    environment:
-      POSTGRES_DB: ${DB_NAME}
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - yourprojectname-network
-
-  redis:
-    image: redis:7
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - yourprojectname-network
-
-  celery:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: celery -A yourprojectname worker --loglevel=info
-    volumes:
-      - .:/app
-    env_file:
-      - .env
-    depends_on:
-      - web
-      - redis
-    networks:
-      - yourprojectname-network
-
-  celery-beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: celery -A yourprojectname beat --loglevel=info
-    volumes:
-      - .:/app
-    env_file:
-      - .env
-    depends_on:
-      - web
-      - redis
-    networks:
-      - yourprojectname-network
-
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
-      - ./staticfiles:/app/staticfiles
-      - /etc/letsencrypt:/etc/letsencrypt
-    depends_on:
-      - web
-    networks:
-      - yourprojectname-network
-
-volumes:
-  postgres_data:
-  redis_data:
-
-networks:
-  yourprojectname-network:
-    driver: bridge
-```
-
-### `Dockerfile`
-
-```dockerfile
-FROM python:3.13-slim
-
-# Create appuser and app directory
-RUN useradd -m -u 1000 appuser && mkdir /app && chown -R appuser:appuser /app
-
-# Set working directory
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y gcc libpq-dev curl && rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
-
-# Copy project files
-COPY . .
-
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# Use non-root user
-USER appuser
-
-EXPOSE 8000
-
-# For Daphne container (in docker-compose) we override CMD anyway
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "yourprojectname.wsgi:application"]
-```
-
-### `nginx/nginx.conf`
-
-```text
-upstream django {
-    server web:8000;
-}
-
-server {
-    listen 80;
-    server_name api.yourdomainname 13.127.106.180;
-    return 301 https://$server_name$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    server_name api.yourdomainname;
-
-    ssl_certificate /etc/letsencrypt/live/api.yourdomainname/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.yourdomainname/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
-
-    client_max_body_size 100M;
-
-    location / {
-        proxy_pass http://django;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /static/ {
-        alias /app/staticfiles/;
-    }
-
-    location /ws/ {
-        proxy_pass http://django;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
 
 ## Troubleshooting Common Issues
 
