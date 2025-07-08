@@ -45,6 +45,7 @@ services:
              daphne -b 0.0.0.0 -p 8000 yourprojectname.asgi:application"
     volumes:
       - .:/app
+      - ./staticfiles:/app/staticfiles
     ports:
       - "8000:8000"
     env_file:
@@ -148,6 +149,8 @@ RUN apt-get update && apt-get install -y gcc libpq-dev curl && rm -rf /var/lib/a
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
+RUN mkdir -p /app/staticfiles && chmod -R 777 /app/staticfiles
+
 # Copy project files
 COPY . .
 
@@ -174,7 +177,7 @@ upstream django {
 server {
     listen 80;
     server_name api.yourdomainname 13.127.106.180;
-    return 301 https://$server_name$request_uri;
+    return 301 https://$host$request_uri;
 }
 
 server {
@@ -404,52 +407,8 @@ server {
    - Ensure `AUTH_USER_MODEL` points to your `CustomUser` model (e.g., `users.CustomUser`).
 
    - Add `rest_framework` and your apps to `INSTALLED_APPS`.
-
-### 4. Generate and Apply Migrations
-
-If your repository lacks migration files, generate them for the database schema.
-
-1. **Build Docker Images**:
-
-   ```bash
-   docker-compose build
-   ```
-
-2. **Generate Migrations**:
-
-   - Create migration files for all apps, including `CustomUser`:
-
-     ```bash
-     docker-compose run --rm web python manage.py makemigrations
-     ```
-
-   - This creates migration files in app directories (e.g., `users/migrations/`).
-
-3. **Apply Migrations**:
-
-   ```bash
-   docker-compose run --rm web python manage.py migrate
-   ```
-
-4. **Create a Superuser** (optional, for admin access):
-
-   ```bash
-   docker-compose run --rm web python manage.py createsuperuser
-   ```
-
-   - Follow prompts to set username, email, and password.
-
-5. **Verify Migrations**:
-
-   - Check for migration files:
-
-     ```bash
-     ls users/migrations/
-     ```
-
-   - Expected: Files like `0001_initial.py`.
-
-### 5. Configure Nginx
+     
+### 4. Configure Nginx
 
 Nginx serves as a reverse proxy and handles static files and HTTPS.
 
@@ -531,6 +490,50 @@ Nginx serves as a reverse proxy and handles static files and HTTPS.
      docker-compose up -d
      docker-compose exec web python manage.py collectstatic --noinput
      ```
+
+### 5. Generate and Apply Migrations
+
+If your repository lacks migration files, generate them for the database schema.
+
+1. **Build Docker Images**:
+
+   ```bash
+   docker-compose build
+   ```
+
+2. **Generate Migrations**:
+
+   - Create migration files for all apps, including `CustomUser`:
+
+     ```bash
+     docker-compose run --rm web python manage.py makemigrations
+     ```
+
+   - This creates migration files in app directories (e.g., `users/migrations/`).
+
+3. **Apply Migrations**:
+
+   ```bash
+   docker-compose run --rm web python manage.py migrate
+   ```
+
+4. **Create a Superuser** (optional, for admin access):
+
+   ```bash
+   docker-compose run --rm web python manage.py createsuperuser
+   ```
+
+   - Follow prompts to set username, email, and password.
+
+5. **Verify Migrations**:
+
+   - Check for migration files:
+
+     ```bash
+     ls users/migrations/
+     ```
+
+   - Expected: Files like `0001_initial.py`.
 
 ### 6. Set Up HTTPS with Let’s Encrypt
 
